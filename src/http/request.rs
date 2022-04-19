@@ -1,6 +1,19 @@
+use anyhow::Result;
+use std::error::Error;
+use std::fmt;
+use std::fmt::Formatter;
 use std::str::FromStr;
 
-type RequestParseError = (u16, String);
+#[derive(Debug, PartialEq, Eq)]
+pub struct RequestParseError(u16, String);
+
+impl fmt::Display for RequestParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_fmt(format_args!("{} {}", self.0, self.1))
+    }
+}
+
+impl Error for RequestParseError {}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RequestMethod {
@@ -19,7 +32,7 @@ impl FromStr for RequestMethod {
             "POST" => Ok(RequestMethod::POST),
             "PUT" => Ok(RequestMethod::PUT),
             "DELETE" => Ok(RequestMethod::DELETE),
-            _ => Err((501, "Not Implemented".to_string())),
+            _ => Err(RequestParseError(501, "Not Implemented".to_string())),
         }
     }
 }
@@ -35,7 +48,7 @@ impl FromStr for HTTPVersion {
     fn from_str(str: &str) -> Result<Self, Self::Err> {
         match str {
             "HTTP/1.1" => Ok(HTTPVersion::V1_1),
-            _ => Err((400, "Bad Request".to_string())),
+            _ => Err(RequestParseError(400, "Bad Request".to_string())),
         }
     }
 }
@@ -59,7 +72,7 @@ impl RequestLine {
     pub fn parse(line: &str) -> Result<RequestLine, RequestParseError> {
         let items: Vec<_> = line.split(' ').collect();
         if items.len() != 3 {
-            return Err((400, "Bad Request".to_string()));
+            return Err(RequestParseError(400, "Bad Request".to_string()));
         }
         let method = RequestMethod::from_str(items[0])?;
         let path = items[1];
@@ -68,6 +81,7 @@ impl RequestLine {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct Request {
     request_line: RequestLine,
 }
@@ -79,8 +93,11 @@ impl Request {
 
     pub fn parse(str: &str) -> Result<Self, RequestParseError> {
         let mut lines = str.split("\r\n");
-        let request_line =
-            RequestLine::parse(lines.next().ok_or((400, "Bad Request".to_string()))?)?;
+        let request_line = RequestLine::parse(
+            lines
+                .next()
+                .ok_or(RequestParseError(400, "Bad Request".to_string()))?,
+        )?;
         Ok(Request::new(request_line))
     }
 }
