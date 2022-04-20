@@ -1,4 +1,4 @@
-use crate::http::request::{Request, RequestLine};
+use crate::http::request::{Request, RequestLine, RequestReader};
 use anyhow::{Context, Result};
 use futures::TryFutureExt;
 use log::{debug, error};
@@ -29,19 +29,11 @@ impl Server {
 }
 
 async fn handle_request(mut stream: TcpStream, _client_addr: SocketAddr) -> Result<()> {
-    // FIXME: The current implementation performs one read (not considering Content-Length)
-    let mut buf = Vec::new();
-    stream
-        .read_buf(&mut buf)
+    let reader = RequestReader::new(&mut stream);
+    let request = Request::parse(reader)
         .await
-        .context("Failed to read data")?;
-    let s = String::from_utf8_lossy(&buf).to_string();
-
-    let request_line = RequestLine::parse(s.split("\r\n").next().unwrap())?;
-    debug!("Accepted request: {:?}", request_line);
-
-    // let request = Request::parse(&s).context("Failed to parse request")?;
-    // debug!("Accepted request: {:?}", request);
+        .context("Failed to parse request")?;
+    debug!("Accepted request: {:?}", request);
 
     stream
         .write(
