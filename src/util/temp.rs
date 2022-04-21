@@ -1,11 +1,10 @@
 use anyhow::Result;
 use log::warn;
-use std::fs::File;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 pub struct TempFile {
-    inner: File,
+    inner: std::fs::File,
     path: PathBuf,
 }
 
@@ -19,12 +18,28 @@ impl TempFile {
         std::fs::create_dir_all(&path)?;
         let file_name = format!("{}.txt", Uuid::new_v4());
         path.push(file_name);
-        let file = File::create(&path)?;
+        let file = std::fs::File::create(&path)?;
         Ok(TempFile { inner: file, path })
     }
 
     pub fn get_path(&self) -> &Path {
         &self.path
+    }
+
+    pub async fn access_for_read(&self) -> Result<tokio::fs::File> {
+        let file = tokio::fs::OpenOptions::new()
+            .read(true)
+            .open(self.get_path())
+            .await?;
+        Ok(file)
+    }
+
+    pub async fn access_for_write(&self) -> Result<tokio::fs::File> {
+        let file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(self.get_path())
+            .await?;
+        Ok(file)
     }
 }
 
