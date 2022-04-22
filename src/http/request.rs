@@ -1,3 +1,4 @@
+use crate::http::common::HTTPVersion;
 use anyhow::Result;
 use log::{debug, error};
 use std::collections::HashMap;
@@ -43,22 +44,6 @@ impl FromStr for RequestMethod {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum HTTPVersion {
-    V1_1,
-}
-
-impl FromStr for HTTPVersion {
-    type Err = RequestParseError;
-
-    fn from_str(str: &str) -> Result<Self, Self::Err> {
-        match str {
-            "HTTP/1.1" => Ok(HTTPVersion::V1_1),
-            _ => Err(RequestParseError(400, "Bad Request".to_string())),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
 pub struct RequestLine {
     method: RequestMethod,
     path: String,
@@ -81,7 +66,8 @@ impl RequestLine {
         }
         let method = RequestMethod::from_str(items[0])?;
         let path = items[1];
-        let version = HTTPVersion::from_str(items[2])?;
+        let version = HTTPVersion::from_str(items[2])
+            .map_err(|_| RequestParseError(400, "Bad Request".to_string()))?;
         Ok(RequestLine::new(method, path, version))
     }
 }
@@ -149,7 +135,7 @@ impl RequestBody {
     }
 }
 
-trait BodyParser: Sized {
+pub trait BodyParser: Sized {
     fn parse(bs: &[u8]) -> Result<Self>;
 }
 
@@ -240,24 +226,27 @@ mod reader {
 
         pub async fn read(&mut self) -> Result<String> {
             loop {
+                if !self.buf.is_empty() {
+                    let mut pos_crlf = None;
+                    for i in 0..(self.buf.len() - 1) {
+                        if self.buf[i] == b'\r' && self.buf[i + 1] == b'\n' {
+                            pos_crlf = Some(i);
+                            break;
+                        }
+                    }
+                    if let Some(pos_crlf) = pos_crlf {
+                        let line = String::from_utf8_lossy(
+                            &self.buf.drain(..pos_crlf).collect::<Vec<_>>(),
+                        )
+                        .to_string();
+                        self.buf.drain(..2);
+                        return Ok(line);
+                    }
+                }
+
                 let mut buf = Vec::new();
                 let _n = self.reader.read_buf(&mut buf).await?;
                 self.buf.extend(buf);
-
-                let mut pos_crlf = None;
-                for i in 0..(self.buf.len() - 1) {
-                    if self.buf[i] == b'\r' && self.buf[i + 1] == b'\n' {
-                        pos_crlf = Some(i);
-                        break;
-                    }
-                }
-                if let Some(pos_crlf) = pos_crlf {
-                    let line =
-                        String::from_utf8_lossy(&self.buf.drain(..pos_crlf).collect::<Vec<_>>())
-                            .to_string();
-                    self.buf.drain(..2);
-                    return Ok(line);
-                }
             }
         }
 

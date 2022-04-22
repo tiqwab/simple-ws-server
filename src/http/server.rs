@@ -1,7 +1,10 @@
+use crate::http::common::HTTPVersion;
 use crate::http::request::{Request, RequestLine};
+use crate::http::response::{Response, ResponseBody, ResponseHeaders, StatusLine};
 use anyhow::{Context, Result};
 use futures::TryFutureExt;
 use log::{debug, error};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -34,10 +37,14 @@ async fn handle_request(mut stream: TcpStream, _client_addr: SocketAddr) -> Resu
         .context("Failed to parse request")?;
     debug!("Accepted request: {:?}", request);
 
+    let response = Response::new(
+        StatusLine::new(HTTPVersion::V1_1, 200, "OK".to_string()),
+        ResponseHeaders::from([("Content-Type", "text/plain"), ("Content-Length", "0")]),
+        ResponseBody::new(vec![]),
+    );
+
     stream
-        .write(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n\r\n".as_bytes(),
-        )
+        .write(&response.encode())
         .await
         .context("Failed to write response")?;
 
