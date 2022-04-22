@@ -1,5 +1,5 @@
 use anyhow::Result;
-use log::debug;
+use log::{debug, error};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -178,180 +178,124 @@ impl Request {
     }
 
     pub async fn parse<T: AsyncRead + Unpin>(
-        mut reader: RequestReader<'_, T>,
+        mut reader: &mut T,
     ) -> Result<Self, RequestParseError> {
-        async fn do_parse_request_line<T: AsyncRead + Unpin>(
-            reader: &mut RequestReader<'_, T>,
-        ) -> Result<(), RequestParseError> {
-            loop {
-                match reader.read_request_line().await {
-                    Ok(Some(_)) => {
-                        return Ok(());
-                    }
-                    Ok(None) => {}
-                    Err(err) => return Err(err),
-                }
-            }
-        }
+        let mut metadata_reader = reader::RequestMetadataReader::new(reader);
 
-        async fn do_parse_headers<T: AsyncRead + Unpin>(
-            reader: &mut RequestReader<'_, T>,
-        ) -> Result<(), RequestParseError> {
-            loop {
-                match reader.read_request_headers().await {
-                    Ok(Some(_)) => return Ok(()),
-                    Ok(None) => {}
-                    Err(err) => return Err(err),
-                }
-            }
-        }
+        let request_line = RequestLine::parse(&metadata_reader.read().await.map_err(|err| {
+            error!("Failed to read request line: {:?}", err);
+            RequestParseError(500, "Internal Server Error".to_string())
+        })?)?;
 
-        async fn do_parse_body<T: AsyncRead + Unpin>(
-            reader: &mut RequestReader<'_, T>,
-        ) -> Result<(), RequestParseError> {
-            loop {
-                match reader.read_request_body().await {
-                    Ok(Some(_)) => return Ok(()),
-                    Ok(None) => {}
-                    Err(err) => return Err(err),
-                }
-            }
-        }
-
-        do_parse_request_line(&mut reader).await?;
-        do_parse_headers(&mut reader).await?;
-        do_parse_body(&mut reader).await?;
-        reader
-            .to_request()
-            .ok_or(RequestParseError(500, "Internal Server Error".to_string()))
-    }
-}
-
-pub struct RequestReader<'a, T: AsyncRead> {
-    reader: &'a mut T,
-    buf: Vec<u8>,
-    request_line: Option<RequestLine>,
-    request_headers: Option<RequestHeaders>,
-    request_body: Option<RequestBody>,
-}
-
-impl<T: AsyncRead + Unpin> RequestReader<'_, T> {
-    pub fn new(reader: &mut T) -> RequestReader<T> {
-        RequestReader {
-            reader,
-            buf: Vec::new(),
-            request_line: None,
-            request_headers: None,
-            request_body: None,
-        }
-    }
-
-    pub async fn read_request_line(&mut self) -> Result<Option<()>, RequestParseError> {
-        if self.request_line.is_some() {
-            return Ok(None);
-        }
-
-        let mut buf = Vec::new();
-        let _n = self.reader.read_buf(&mut buf).await.unwrap(); // FIXME unwrap
-        self.buf.extend(buf);
-
-        if self.buf.len() == 0 {
-            return Ok(None);
-        }
-
-        let mut pos_crlf = 0;
-        for i in 0..(self.buf.len() - 1) {
-            if self.buf[i] == b'\r' && self.buf[i + 1] == b'\n' {
-                pos_crlf = i;
+        let mut lines = vec![];
+        loop {
+            let line = metadata_reader.read().await.map_err(|err| {
+                error!("Failed to read header line: {:?}", err);
+                RequestParseError(500, "Internal Server Error".to_string())
+            })?;
+            if &line == "" {
                 break;
             }
+            lines.push(line);
         }
-        if pos_crlf == 0 {
-            return Ok(None);
-        }
-
-        let line =
-            String::from_utf8_lossy(&self.buf.drain(..pos_crlf).collect::<Vec<_>>()).to_string();
-        let request_line = RequestLine::parse(&line)?;
-
-        // Retain \r\n at the beginning
-        // self.buf.drain(..2);
-
-        self.request_line = Some(request_line);
-        Ok(Some(()))
-    }
-
-    pub async fn read_request_headers(&mut self) -> Result<Option<()>, RequestParseError> {
-        if self.request_headers.is_some() {
-            return Ok(None);
-        }
-
-        let mut buf = Vec::new();
-        let _n = self.reader.read_buf(&mut buf).await.unwrap(); // FIXME unwrap
-        self.buf.extend(buf);
-
-        if self.buf.len() == 0 {
-            return Ok(None);
-        }
-
-        let mut pos_crlf2 = None;
-        for i in 0..(self.buf.len() - 3) {
-            if self.buf[i] == b'\r'
-                && self.buf[i + 1] == b'\n'
-                && self.buf[i + 2] == b'\r'
-                && self.buf[i + 3] == b'\n'
-            {
-                pos_crlf2 = Some(i);
-                break;
-            }
-        }
-        let pos_crlf2 = match pos_crlf2 {
-            None => return Ok(None),
-            Some(i) => i,
-        };
-
-        // TODO: parse only allowed characters (RFC 7230 3.2)
-        let str_headers =
-            String::from_utf8_lossy(&self.buf.drain(..pos_crlf2).collect::<Vec<_>>()).to_string();
-        let lines = str_headers.split("\r\n").skip(1).collect::<Vec<_>>();
-        let headers = RequestHeaders::parse(&lines)?;
-
-        // Remove \r\n\r\n
-        self.buf.drain(..4);
-        self.request_headers = Some(headers);
-        Ok(Some(()))
-    }
-
-    pub async fn read_request_body(&mut self) -> Result<Option<()>, RequestParseError> {
-        let headers = self
-            .request_headers
-            .as_ref()
-            .ok_or(RequestParseError(500, "Internal Server Error".to_string()))?;
+        let request_headers =
+            RequestHeaders::parse(&lines.iter().map(|x| x.as_str()).collect::<Vec<_>>()[..])?;
         let content_length = {
-            let cl = headers.get("Content-Length").unwrap_or("0");
+            let cl = request_headers.get("Content-Length").unwrap_or("0");
             cl.parse::<usize>()
                 .map_err(|_| RequestParseError(400, "Bad Request".to_string()))?
         };
 
-        let mut buf = Vec::new();
-        let _n = self.reader.read_buf(&mut buf).await.unwrap(); // FIXME unwrap
-        self.buf.extend(buf);
+        let mut body_reader = metadata_reader.to_body_reader(content_length);
+        let request_body = RequestBody::new(
+            body_reader
+                .read()
+                .await
+                .map_err(|err| {
+                    error!("Failed to read header line: {:?}", err);
+                    RequestParseError(500, "Internal Server Error".to_string())
+                })?
+                .to_vec(),
+        );
 
-        if self.buf.len() < content_length {
-            return Ok(None);
-        }
+        Ok(Request::new(request_line, request_headers, request_body))
+    }
+}
 
-        let body = RequestBody(self.buf[..content_length].to_vec());
-        self.buf.clear();
-        self.request_body = Some(body);
-        Ok(Some(()))
+mod reader {
+    use super::*;
+
+    pub struct RequestMetadataReader<'a, T: AsyncRead> {
+        reader: &'a mut T,
+        buf: Vec<u8>,
     }
 
-    pub fn to_request(self) -> Option<Request> {
-        let line = self.request_line?;
-        let headers = self.request_headers?;
-        let body = self.request_body?;
-        Some(Request::new(line, headers, body))
+    impl<'a, T: AsyncRead + Unpin> RequestMetadataReader<'a, T> {
+        pub fn new(reader: &mut T) -> RequestMetadataReader<T> {
+            RequestMetadataReader {
+                reader,
+                buf: Vec::new(),
+            }
+        }
+
+        pub async fn read(&mut self) -> Result<String> {
+            loop {
+                let mut buf = Vec::new();
+                let _n = self.reader.read_buf(&mut buf).await?;
+                self.buf.extend(buf);
+
+                let mut pos_crlf = None;
+                for i in 0..(self.buf.len() - 1) {
+                    if self.buf[i] == b'\r' && self.buf[i + 1] == b'\n' {
+                        pos_crlf = Some(i);
+                        break;
+                    }
+                }
+                if let Some(pos_crlf) = pos_crlf {
+                    let line =
+                        String::from_utf8_lossy(&self.buf.drain(..pos_crlf).collect::<Vec<_>>())
+                            .to_string();
+                    self.buf.drain(..2);
+                    return Ok(line);
+                }
+            }
+        }
+
+        pub fn to_body_reader(self, length: usize) -> RequestBodyReader<'a, T> {
+            RequestBodyReader::new(self.reader, self.buf, length)
+        }
+    }
+
+    pub struct RequestBodyReader<'a, T: AsyncRead> {
+        reader: &'a mut T,
+        buf: Vec<u8>,
+        content_length: usize,
+    }
+
+    impl<T: AsyncRead + Unpin> RequestBodyReader<'_, T> {
+        pub fn new(
+            reader: &mut T,
+            buf: Vec<u8>,
+            content_length: usize,
+        ) -> RequestBodyReader<'_, T> {
+            RequestBodyReader {
+                reader,
+                buf,
+                content_length,
+            }
+        }
+
+        pub async fn read(&mut self) -> Result<&[u8]> {
+            loop {
+                if self.buf.len() >= self.content_length {
+                    return Ok(&self.buf[..self.content_length]);
+                }
+
+                let mut buf = Vec::new();
+                let _n = self.reader.read_buf(&mut buf).await?;
+                self.buf.extend(buf);
+            }
+        }
     }
 }
 
@@ -408,12 +352,7 @@ mod tests {
         }
 
         // exercise
-        let mut accessor = OpenOptions::new()
-            .read(true)
-            .open(tmp_file.get_path())
-            .await
-            .unwrap();
-        let actual = Request::parse(RequestReader::new(&mut accessor))
+        let actual = Request::parse(&mut tmp_file.access_for_read().await.unwrap())
             .await
             .unwrap();
 
@@ -443,11 +382,9 @@ mod tests {
             .unwrap();
 
         // exercise
-        let actual = Request::parse(RequestReader::new(
-            &mut tmp_file.access_for_read().await.unwrap(),
-        ))
-        .await
-        .unwrap();
+        let actual = Request::parse(&mut tmp_file.access_for_read().await.unwrap())
+            .await
+            .unwrap();
 
         // verify
         assert_eq!(actual.request_line.method, RequestMethod::POST);

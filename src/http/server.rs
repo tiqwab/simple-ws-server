@@ -1,4 +1,4 @@
-use crate::http::request::{Request, RequestLine, RequestReader};
+use crate::http::request::{Request, RequestLine};
 use anyhow::{Context, Result};
 use futures::TryFutureExt;
 use log::{debug, error};
@@ -29,8 +29,7 @@ impl Server {
 }
 
 async fn handle_request(mut stream: TcpStream, _client_addr: SocketAddr) -> Result<()> {
-    let reader = RequestReader::new(&mut stream);
-    let request = Request::parse(reader)
+    let request = Request::parse(&mut stream)
         .await
         .context("Failed to parse request")?;
     debug!("Accepted request: {:?}", request);
