@@ -137,16 +137,43 @@ impl RequestHeaders {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub struct RequestBody(Vec<u8>);
+
+impl RequestBody {
+    pub fn new(v: Vec<u8>) -> RequestBody {
+        RequestBody(v)
+    }
+
+    pub fn parse<T: BodyParser>(&self) -> Result<T> {
+        T::parse(&self.0)
+    }
+}
+
+trait BodyParser: Sized {
+    fn parse(bs: &[u8]) -> Result<Self>;
+}
+
+impl BodyParser for String {
+    fn parse(bs: &[u8]) -> Result<Self> {
+        let vs = bs.to_vec();
+        let s = String::from_utf8(vs)?;
+        Ok(s)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub struct Request {
     request_line: RequestLine,
     headers: RequestHeaders,
+    body: RequestBody,
 }
 
 impl Request {
-    pub fn new(request_line: RequestLine, headers: RequestHeaders) -> Request {
+    pub fn new(request_line: RequestLine, headers: RequestHeaders, body: RequestBody) -> Request {
         Request {
             request_line,
             headers,
+            body,
         }
     }
 
@@ -155,11 +182,11 @@ impl Request {
     ) -> Result<Self, RequestParseError> {
         async fn do_parse_request_line<T: AsyncRead + Unpin>(
             reader: &mut RequestReader<'_, T>,
-        ) -> Result<RequestLine, RequestParseError> {
+        ) -> Result<(), RequestParseError> {
             loop {
                 match reader.read_request_line().await {
-                    Ok(Some(request_line)) => {
-                        return Ok(request_line);
+                    Ok(Some(_)) => {
+                        return Ok(());
                     }
                     Ok(None) => {}
                     Err(err) => return Err(err),
@@ -169,27 +196,43 @@ impl Request {
 
         async fn do_parse_headers<T: AsyncRead + Unpin>(
             reader: &mut RequestReader<'_, T>,
-        ) -> Result<RequestHeaders, RequestParseError> {
+        ) -> Result<(), RequestParseError> {
             loop {
                 match reader.read_request_headers().await {
-                    Ok(Some(request_headers)) => return Ok(request_headers),
+                    Ok(Some(_)) => return Ok(()),
                     Ok(None) => {}
                     Err(err) => return Err(err),
                 }
             }
         }
 
-        let request_line = do_parse_request_line(&mut reader).await?;
-        let headers = do_parse_headers(&mut reader).await?;
-        Ok(Request::new(request_line, headers))
+        async fn do_parse_body<T: AsyncRead + Unpin>(
+            reader: &mut RequestReader<'_, T>,
+        ) -> Result<(), RequestParseError> {
+            loop {
+                match reader.read_request_body().await {
+                    Ok(Some(_)) => return Ok(()),
+                    Ok(None) => {}
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+
+        do_parse_request_line(&mut reader).await?;
+        do_parse_headers(&mut reader).await?;
+        do_parse_body(&mut reader).await?;
+        reader
+            .to_request()
+            .ok_or(RequestParseError(500, "Internal Server Error".to_string()))
     }
 }
 
 pub struct RequestReader<'a, T: AsyncRead> {
     reader: &'a mut T,
     buf: Vec<u8>,
-    is_done_request_line: bool,
-    is_done_request_headers: bool,
+    request_line: Option<RequestLine>,
+    request_headers: Option<RequestHeaders>,
+    request_body: Option<RequestBody>,
 }
 
 impl<T: AsyncRead + Unpin> RequestReader<'_, T> {
@@ -197,13 +240,14 @@ impl<T: AsyncRead + Unpin> RequestReader<'_, T> {
         RequestReader {
             reader,
             buf: Vec::new(),
-            is_done_request_line: false,
-            is_done_request_headers: false,
+            request_line: None,
+            request_headers: None,
+            request_body: None,
         }
     }
 
-    pub async fn read_request_line(&mut self) -> Result<Option<RequestLine>, RequestParseError> {
-        if self.is_done_request_line {
+    pub async fn read_request_line(&mut self) -> Result<Option<()>, RequestParseError> {
+        if self.request_line.is_some() {
             return Ok(None);
         }
 
@@ -233,14 +277,12 @@ impl<T: AsyncRead + Unpin> RequestReader<'_, T> {
         // Retain \r\n at the beginning
         // self.buf.drain(..2);
 
-        self.is_done_request_line = true;
-        Ok(Some(request_line))
+        self.request_line = Some(request_line);
+        Ok(Some(()))
     }
 
-    pub async fn read_request_headers(
-        &mut self,
-    ) -> Result<Option<RequestHeaders>, RequestParseError> {
-        if self.is_done_request_headers {
+    pub async fn read_request_headers(&mut self) -> Result<Option<()>, RequestParseError> {
+        if self.request_headers.is_some() {
             return Ok(None);
         }
 
@@ -276,8 +318,40 @@ impl<T: AsyncRead + Unpin> RequestReader<'_, T> {
 
         // Remove \r\n\r\n
         self.buf.drain(..4);
-        self.is_done_request_headers = true;
-        Ok(Some(headers))
+        self.request_headers = Some(headers);
+        Ok(Some(()))
+    }
+
+    pub async fn read_request_body(&mut self) -> Result<Option<()>, RequestParseError> {
+        let headers = self
+            .request_headers
+            .as_ref()
+            .ok_or(RequestParseError(500, "Internal Server Error".to_string()))?;
+        let content_length = {
+            let cl = headers.get("Content-Length").unwrap_or("0");
+            cl.parse::<usize>()
+                .map_err(|_| RequestParseError(400, "Bad Request".to_string()))?
+        };
+
+        let mut buf = Vec::new();
+        let _n = self.reader.read_buf(&mut buf).await.unwrap(); // FIXME unwrap
+        self.buf.extend(buf);
+
+        if self.buf.len() < content_length {
+            return Ok(None);
+        }
+
+        let body = RequestBody(self.buf[..content_length].to_vec());
+        self.buf.clear();
+        self.request_body = Some(body);
+        Ok(Some(()))
+    }
+
+    pub fn to_request(self) -> Option<Request> {
+        let line = self.request_line?;
+        let headers = self.request_headers?;
+        let body = self.request_body?;
+        Some(Request::new(line, headers, body))
     }
 }
 
@@ -349,10 +423,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_parse_request_with_headers() {
+    async fn test_parse_request_post() {
         // setup
         let tmp_file = TempFile::new().unwrap();
-        let str = "GET / HTTP/1.1\r\nContent-Type: text/plain\r\n\r\n";
+        let str = [
+            "POST / HTTP/1.1",
+            "Content-Type: application/x-www-form-urlencoded",
+            "Content-Length: 10",
+            "",
+            "name=alice",
+        ]
+        .join("\r\n");
         tmp_file
             .access_for_write()
             .await
@@ -369,7 +450,11 @@ mod tests {
         .unwrap();
 
         // verify
-        assert_eq!(actual.request_line.method, RequestMethod::GET);
-        assert_eq!(actual.headers.get("Content-Type"), Some("text/plain"));
+        assert_eq!(actual.request_line.method, RequestMethod::POST);
+        assert_eq!(
+            actual.headers.get("Content-Type"),
+            Some("application/x-www-form-urlencoded")
+        );
+        assert_eq!(&actual.body.parse::<String>().unwrap(), "name=alice")
     }
 }
