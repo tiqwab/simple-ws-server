@@ -1,10 +1,11 @@
 use crate::http::common::HTTPVersion;
 use anyhow::Result;
 use log::{debug, error};
+use std::collections::hash_map::Iter;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
-use std::fmt::Formatter;
+use std::fmt::{Display, Formatter};
 use std::io::Read;
 use std::str::FromStr;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -43,6 +44,17 @@ impl FromStr for RequestMethod {
     }
 }
 
+impl Display for RequestMethod {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            RequestMethod::GET => f.write_str("GET"),
+            RequestMethod::POST => f.write_str("POST"),
+            RequestMethod::PUT => f.write_str("PUT"),
+            RequestMethod::DELETE => f.write_str("DELETE"),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct RequestLine {
     method: RequestMethod,
@@ -75,6 +87,8 @@ impl RequestLine {
 #[derive(Debug, PartialEq, Eq)]
 pub struct RequestHeaders(HashMap<String, String>);
 
+type RequestHeadersIter<'a, K, V> = std::collections::hash_map::Iter<'a, K, V>;
+
 impl RequestHeaders {
     pub fn new() -> RequestHeaders {
         RequestHeaders(HashMap::new())
@@ -90,6 +104,10 @@ impl RequestHeaders {
 
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn iter(&self) -> RequestHeadersIter<'_, String, String> {
+        self.0.iter()
     }
 
     pub fn parse(lines: &[&str]) -> Result<RequestHeaders, RequestParseError> {
@@ -161,6 +179,22 @@ impl Request {
             headers,
             body,
         }
+    }
+
+    pub fn get_method(&self) -> &RequestMethod {
+        &self.request_line.method
+    }
+
+    pub fn get_path(&self) -> &str {
+        &self.request_line.path
+    }
+
+    pub fn get_headers(&self) -> &RequestHeaders {
+        &self.headers
+    }
+
+    pub fn get_body(&self) -> &[u8] {
+        &self.body.0
     }
 
     pub async fn parse<T: AsyncRead + Unpin>(

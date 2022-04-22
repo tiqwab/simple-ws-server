@@ -75,6 +75,11 @@ impl ResponseBody {
         ResponseBody(data)
     }
 
+    /// Return size as bytes
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         self.0.clone()
     }
