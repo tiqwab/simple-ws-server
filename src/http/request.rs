@@ -1,4 +1,5 @@
 use crate::http::common::HTTPVersion;
+use crate::http::response::ResponseStatus;
 use anyhow::Result;
 use log::{debug, error};
 use std::collections::hash_map::Iter;
@@ -12,7 +13,21 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::net::TcpStream;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct RequestParseError(u16, String);
+pub struct RequestParseError(ResponseStatus, String);
+
+impl RequestParseError {
+    pub fn new(status: ResponseStatus, message: &str) -> RequestParseError {
+        RequestParseError(status, message.to_string())
+    }
+
+    pub fn get_status(&self) -> &ResponseStatus {
+        &self.0
+    }
+
+    pub fn get_error_message(&self) -> &str {
+        &self.1
+    }
+}
 
 impl fmt::Display for RequestParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -39,7 +54,10 @@ impl FromStr for RequestMethod {
             "POST" => Ok(RequestMethod::POST),
             "PUT" => Ok(RequestMethod::PUT),
             "DELETE" => Ok(RequestMethod::DELETE),
-            _ => Err(RequestParseError(501, "Not Implemented".to_string())),
+            _ => Err(RequestParseError::new(
+                ResponseStatus::NotImplemented,
+                "Unknown request method",
+            )),
         }
     }
 }
@@ -74,12 +92,19 @@ impl RequestLine {
     pub fn parse(line: &str) -> Result<RequestLine, RequestParseError> {
         let items: Vec<_> = line.split(' ').collect();
         if items.len() != 3 {
-            return Err(RequestParseError(400, "Bad Request".to_string()));
+            return Err(RequestParseError::new(
+                ResponseStatus::BadRequest,
+                "Illegal request line",
+            ));
         }
         let method = RequestMethod::from_str(items[0])?;
         let path = items[1];
-        let version = HTTPVersion::from_str(items[2])
-            .map_err(|_| RequestParseError(400, "Bad Request".to_string()))?;
+        let version = HTTPVersion::from_str(items[2]).map_err(|_| {
+            RequestParseError::new(
+                ResponseStatus::BadRequest,
+                &format!("Illegal request line: {}", line),
+            )
+        })?;
         Ok(RequestLine::new(method, path, version))
     }
 }
@@ -116,7 +141,10 @@ impl RequestHeaders {
             let pos_delim = line
                 .chars()
                 .position(|c| c == ':')
-                .ok_or(RequestParseError(400, "Bad Request".to_string()))?;
+                .ok_or(RequestParseError::new(
+                    ResponseStatus::BadRequest,
+                    &format!("Illegal header field: {}", line),
+                ))?;
 
             let field_name = line[..pos_delim].to_string();
             let field_value = line[(pos_delim + 1)..].trim().to_string();
@@ -125,7 +153,10 @@ impl RequestHeaders {
             // (RFC 7230 3.2.4)
             let trimmed_field_name = field_name.trim().to_string();
             if field_name != trimmed_field_name {
-                return Err(RequestParseError(400, "Bad Request".to_string()));
+                return Err(RequestParseError::new(
+                    ResponseStatus::BadRequest,
+                    &format!("Illegal header field: {}", line),
+                ));
             }
 
             Ok((field_name, field_value))
@@ -203,15 +234,19 @@ impl Request {
         let mut metadata_reader = reader::RequestMetadataReader::new(reader);
 
         let request_line = RequestLine::parse(&metadata_reader.read().await.map_err(|err| {
-            error!("Failed to read request line: {:?}", err);
-            RequestParseError(500, "Internal Server Error".to_string())
+            RequestParseError::new(
+                ResponseStatus::InternalServerError,
+                &format!("Failed to read request line: {:?}", err),
+            )
         })?)?;
 
         let mut lines = vec![];
         loop {
             let line = metadata_reader.read().await.map_err(|err| {
-                error!("Failed to read header line: {:?}", err);
-                RequestParseError(500, "Internal Server Error".to_string())
+                RequestParseError::new(
+                    ResponseStatus::InternalServerError,
+                    &format!("Failed to read header line: {:?}", err),
+                )
             })?;
             if &line == "" {
                 break;
@@ -222,8 +257,9 @@ impl Request {
             RequestHeaders::parse(&lines.iter().map(|x| x.as_str()).collect::<Vec<_>>()[..])?;
         let content_length = {
             let cl = request_headers.get("Content-Length").unwrap_or("0");
-            cl.parse::<usize>()
-                .map_err(|_| RequestParseError(400, "Bad Request".to_string()))?
+            cl.parse::<usize>().map_err(|_| {
+                RequestParseError::new(ResponseStatus::BadRequest, "Illegal Content-Length")
+            })?
         };
 
         let mut body_reader = metadata_reader.to_body_reader(content_length);
@@ -233,7 +269,10 @@ impl Request {
                 .await
                 .map_err(|err| {
                     error!("Failed to read header line: {:?}", err);
-                    RequestParseError(500, "Internal Server Error".to_string())
+                    RequestParseError::new(
+                        ResponseStatus::BadRequest,
+                        "Failed to read request body",
+                    )
                 })?
                 .to_vec(),
         );
@@ -350,7 +389,10 @@ mod tests {
     fn test_parse_request_line_with_unsupported_method() {
         let str = "PATCH / HTTP/1.1";
         let actual = RequestLine::parse(str);
-        assert!(matches!(actual, Err(RequestParseError(501, _))));
+        assert!(matches!(
+            actual,
+            Err(RequestParseError(ResponseStatus::NotImplemented, _))
+        ));
     }
 
     #[test]
@@ -366,7 +408,10 @@ mod tests {
     fn test_parse_request_headers_with_illegal_format() {
         let ss = ["Content-Type : text/plain"];
         let actual = RequestHeaders::parse(&ss);
-        assert!(matches!(actual, Err(RequestParseError(400, _))));
+        assert!(matches!(
+            actual,
+            Err(RequestParseError(ResponseStatus::BadRequest, _))
+        ));
     }
 
     #[tokio::test]

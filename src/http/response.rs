@@ -1,25 +1,25 @@
 use crate::http::common::HTTPVersion;
 use std::collections::HashMap;
+use std::fmt;
+use std::fmt::Formatter;
 
+#[derive(Debug, Clone)]
 pub struct StatusLine {
     version: HTTPVersion,
-    status_code: u16,
-    reason_phrase: String,
+    status: ResponseStatus,
 }
 
 impl StatusLine {
-    pub fn new(version: HTTPVersion, status_code: u16, reason_phrase: String) -> StatusLine {
-        StatusLine {
-            version,
-            status_code,
-            reason_phrase,
-        }
+    pub fn new(version: HTTPVersion, status: ResponseStatus) -> StatusLine {
+        StatusLine { version, status }
     }
 
     pub fn encode(&self) -> Vec<u8> {
         format!(
             "{} {} {}",
-            self.version, self.status_code, self.reason_phrase
+            self.version,
+            self.status.status_code(),
+            self.status.reason_phrase(),
         )
         .as_bytes()
         .to_owned()
@@ -111,6 +111,45 @@ impl Response {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ResponseStatus {
+    Ok,
+    BadRequest,
+    InternalServerError,
+    NotImplemented,
+}
+
+impl ResponseStatus {
+    pub fn status_code(&self) -> u16 {
+        match self {
+            ResponseStatus::Ok => 200,
+            ResponseStatus::BadRequest => 400,
+            ResponseStatus::InternalServerError => 500,
+            ResponseStatus::NotImplemented => 501,
+        }
+    }
+
+    pub fn reason_phrase(&self) -> String {
+        match self {
+            ResponseStatus::Ok => "OK",
+            ResponseStatus::BadRequest => "Bad Request",
+            ResponseStatus::InternalServerError => "Internal Server Error",
+            ResponseStatus::NotImplemented => "Not Implemented",
+        }
+        .to_string()
+    }
+
+    pub fn is_server_error(&self) -> bool {
+        self.status_code() / 100 == 5
+    }
+}
+
+impl fmt::Display for ResponseStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_fmt(format_args!("{}", self.status_code()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,7 +159,7 @@ mod tests {
         // setup
         let data = "hello".as_bytes();
         let response = Response::new(
-            StatusLine::new(HTTPVersion::V1_1, 200, "OK".to_string()),
+            StatusLine::new(HTTPVersion::V1_1, ResponseStatus::Ok),
             ResponseHeaders::from([("Content-Length", data.len().to_string())]),
             ResponseBody::new(data.to_owned()),
         );
