@@ -244,6 +244,7 @@ impl Request {
 
 mod reader {
     use super::*;
+    use anyhow::bail;
 
     pub struct RequestMetadataReader<'a, T: AsyncRead> {
         reader: &'a mut T,
@@ -279,7 +280,11 @@ mod reader {
                 }
 
                 let mut buf = Vec::new();
-                let _n = self.reader.read_buf(&mut buf).await?;
+                let n = self.reader.read_buf(&mut buf).await?;
+                if n == 0 {
+                    // this should be the case when the client disconnected
+                    bail!("client disconnected");
+                }
                 self.buf.extend(buf);
             }
         }
@@ -315,7 +320,11 @@ mod reader {
                 }
 
                 let mut buf = Vec::new();
-                let _n = self.reader.read_buf(&mut buf).await?;
+                let n = self.reader.read_buf(&mut buf).await?;
+                if n == 0 {
+                    // this should be the case when the client disconnected
+                    bail!("client disconnected");
+                }
                 self.buf.extend(buf);
             }
         }
