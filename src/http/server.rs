@@ -1,4 +1,4 @@
-use crate::http::common::HTTPVersion;
+use crate::http::common::{HTTPVersion, IMFDateTime};
 use crate::http::request::{Request, RequestLine, RequestParseError};
 use crate::http::response::{Response, ResponseBody, ResponseHeaders, ResponseStatus, StatusLine};
 use anyhow::{Context, Result};
@@ -86,6 +86,7 @@ async fn handle_request(mut stream: TcpStream, client_addr: SocketAddr) -> Resul
         let response = Response::new(
             StatusLine::new(HTTPVersion::V1_1, ResponseStatus::Ok),
             ResponseHeaders::from([
+                ("Date", IMFDateTime::now().to_string()),
                 ("Content-Type", "application/json".to_string()),
                 ("Content-Length", response_body.len().to_string()),
             ]),
@@ -104,7 +105,11 @@ async fn handle_request(mut stream: TcpStream, client_addr: SocketAddr) -> Resul
         }
         Response::new(
             StatusLine::new(HTTPVersion::V1_1, err.get_status().clone()),
-            ResponseHeaders::from([("Connection", "close"), ("Content-Length", "0")]),
+            ResponseHeaders::from([
+                ("Date", IMFDateTime::now().to_string().as_str()),
+                ("Connection", "close"),
+                ("Content-Length", "0"),
+            ]),
             ResponseBody::new(vec![]),
         )
     });
