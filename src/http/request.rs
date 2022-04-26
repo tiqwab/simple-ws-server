@@ -224,6 +224,10 @@ impl Request {
         &self.headers
     }
 
+    pub fn get_header(&self, key: &str) -> Option<&str> {
+        self.headers.get(key)
+    }
+
     pub fn get_body(&self) -> &[u8] {
         &self.body.0
     }
