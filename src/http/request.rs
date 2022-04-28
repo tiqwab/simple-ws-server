@@ -1,4 +1,5 @@
 use crate::http::common::HTTPVersion;
+use crate::http::headers;
 use crate::http::response::ResponseStatus;
 use anyhow::Result;
 use log::{debug, error};
@@ -129,8 +130,15 @@ impl RequestHeaders {
         RequestHeaders(headers)
     }
 
-    pub fn get(&self, key: &str) -> Option<&str> {
+    pub fn get_raw(&self, key: &str) -> Option<&str> {
         self.0.get(key).map(|x| x.as_str())
+    }
+
+    pub fn get<T, U: headers::HeaderParser<Value = T>>(
+        &self,
+        key: &headers::HTTPHeader<U>,
+    ) -> Option<T> {
+        self.get_raw(key.name()).and_then(|s| key.parse(s))
     }
 
     pub fn insert(&mut self, key: String, value: String) -> Option<String> {
@@ -239,7 +247,7 @@ impl Request {
     }
 
     pub fn get_header(&self, key: &str) -> Option<&str> {
-        self.headers.get(key)
+        self.headers.get_raw(key)
     }
 
     pub fn insert_header(&mut self, key: String, value: String) -> Option<String> {
@@ -252,7 +260,7 @@ impl Request {
 
     /// Return header value converted to lower cases
     pub fn get_header_lc(&self, key: &str) -> Option<String> {
-        self.headers.get(key).map(|s| s.to_ascii_lowercase())
+        self.headers.get_raw(key).map(|s| s.to_ascii_lowercase())
     }
 
     pub fn get_body(&self) -> &[u8] {
@@ -287,7 +295,7 @@ impl Request {
         let request_headers =
             RequestHeaders::parse(&lines.iter().map(|x| x.as_str()).collect::<Vec<_>>()[..])?;
         let content_length = {
-            let cl = request_headers.get("Content-Length").unwrap_or("0");
+            let cl = request_headers.get_raw("Content-Length").unwrap_or("0");
             cl.parse::<usize>().map_err(|_| {
                 RequestParseError::new(ResponseStatus::BadRequest, "Illegal Content-Length")
             })?
@@ -428,11 +436,19 @@ mod tests {
 
     #[test]
     fn test_parse_request_headers() {
-        let ss = ["Content-Type: text/plain", "Content-Length: 0"];
+        let ss = [
+            "Content-Type: text/plain",
+            "Content-Length: 0",
+            "Connection: keep-alive, Upgrade",
+        ];
         let actual = RequestHeaders::parse(&ss).unwrap();
-        assert_eq!(actual.len(), 2);
-        assert_eq!(actual.get("Content-Type"), Some("text/plain"));
-        assert_eq!(actual.get("Content-Length"), Some("0"))
+        assert_eq!(actual.len(), 3);
+        assert_eq!(actual.get_raw("Content-Type"), Some("text/plain"));
+        assert_eq!(actual.get_raw("Content-Length"), Some("0"));
+        assert_eq!(
+            actual.get(&headers::CONNECTION),
+            Some(vec!["keep-alive".to_string(), "Upgrade".to_string()])
+        );
     }
 
     #[test]
@@ -497,7 +513,7 @@ mod tests {
         // verify
         assert_eq!(actual.request_line.method, RequestMethod::POST);
         assert_eq!(
-            actual.headers.get("Content-Type"),
+            actual.headers.get_raw("Content-Type"),
             Some("application/x-www-form-urlencoded")
         );
         assert_eq!(&actual.body.parse::<String>().unwrap(), "name=alice")
