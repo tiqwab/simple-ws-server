@@ -14,6 +14,10 @@ impl StatusLine {
         StatusLine { version, status }
     }
 
+    pub fn get_status(&self) -> &ResponseStatus {
+        &self.status
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         format!(
             "{} {} {}",
@@ -26,6 +30,7 @@ impl StatusLine {
     }
 }
 
+#[derive(Debug)]
 pub struct ResponseHeaders(HashMap<String, String>);
 
 impl ResponseHeaders {
@@ -68,6 +73,7 @@ impl ResponseHeaders {
     }
 }
 
+#[derive(Debug)]
 pub struct ResponseBody(Vec<u8>);
 
 impl ResponseBody {
@@ -85,6 +91,7 @@ impl ResponseBody {
     }
 }
 
+#[derive(Debug)]
 pub struct Response {
     status_line: StatusLine,
     headers: ResponseHeaders,
@@ -100,6 +107,14 @@ impl Response {
         }
     }
 
+    pub fn get_status(&self) -> &ResponseStatus {
+        self.status_line.get_status()
+    }
+
+    pub fn get_header(&self, key: &str) -> Option<&str> {
+        self.headers.get(key)
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         let mut res = vec![];
         res.extend(self.status_line.encode());
@@ -113,6 +128,7 @@ impl Response {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ResponseStatus {
+    SwitchingProtocol,
     Ok,
     BadRequest,
     InternalServerError,
@@ -122,6 +138,7 @@ pub enum ResponseStatus {
 impl ResponseStatus {
     pub fn status_code(&self) -> u16 {
         match self {
+            ResponseStatus::SwitchingProtocol => 101,
             ResponseStatus::Ok => 200,
             ResponseStatus::BadRequest => 400,
             ResponseStatus::InternalServerError => 500,
@@ -131,6 +148,7 @@ impl ResponseStatus {
 
     pub fn reason_phrase(&self) -> String {
         match self {
+            ResponseStatus::SwitchingProtocol => "Switching Protocol",
             ResponseStatus::Ok => "OK",
             ResponseStatus::BadRequest => "Bad Request",
             ResponseStatus::InternalServerError => "Internal Server Error",

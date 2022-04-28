@@ -37,7 +37,7 @@ impl fmt::Display for RequestParseError {
 
 impl Error for RequestParseError {}
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum RequestMethod {
     GET,
     POST,
@@ -73,7 +73,7 @@ impl Display for RequestMethod {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RequestLine {
     method: RequestMethod,
     path: String,
@@ -109,7 +109,7 @@ impl RequestLine {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RequestHeaders(HashMap<String, String>);
 
 type RequestHeadersIter<'a, K, V> = std::collections::hash_map::Iter<'a, K, V>;
@@ -119,12 +119,26 @@ impl RequestHeaders {
         RequestHeaders(HashMap::new())
     }
 
+    pub fn from<const N: usize>(
+        arr: [(impl Into<String>, impl Into<String>); N],
+    ) -> RequestHeaders {
+        let mut headers = HashMap::new();
+        for (k, v) in arr {
+            headers.insert(k.into(), v.into());
+        }
+        RequestHeaders(headers)
+    }
+
     pub fn get(&self, key: &str) -> Option<&str> {
         self.0.get(key).map(|x| x.as_str())
     }
 
     pub fn insert(&mut self, key: String, value: String) -> Option<String> {
         self.0.insert(key, value)
+    }
+
+    pub fn remove(&mut self, key: &str) -> Option<String> {
+        self.0.remove(key)
     }
 
     pub fn len(&self) -> usize {
@@ -171,7 +185,7 @@ impl RequestHeaders {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RequestBody(Vec<u8>);
 
 impl RequestBody {
@@ -196,7 +210,7 @@ impl BodyParser for String {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Request {
     request_line: RequestLine,
     headers: RequestHeaders,
@@ -226,6 +240,19 @@ impl Request {
 
     pub fn get_header(&self, key: &str) -> Option<&str> {
         self.headers.get(key)
+    }
+
+    pub fn insert_header(&mut self, key: String, value: String) -> Option<String> {
+        self.headers.insert(key, value)
+    }
+
+    pub fn remove_header(&mut self, key: &str) -> Option<String> {
+        self.headers.remove(key)
+    }
+
+    /// Return header value converted to lower cases
+    pub fn get_header_lc(&self, key: &str) -> Option<String> {
+        self.headers.get(key).map(|s| s.to_ascii_lowercase())
     }
 
     pub fn get_body(&self) -> &[u8] {
