@@ -4,10 +4,10 @@ use crate::http::request::{Request, RequestMethod, RequestParseError};
 use crate::http::response::{Response, ResponseBody, ResponseHeaders, ResponseStatus, StatusLine};
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use log::error;
+use log::{debug, error};
 use sha1::{Digest, Sha1};
 use std::net::SocketAddr;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 const WS_VERSION: &str = "13";
@@ -36,11 +36,13 @@ const WS_ACCEPT_STR: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     +---------------------------------------------------------------+
 */
 
+#[derive(Debug)]
 pub enum Frame {
     // Text { data: String },
     // Binary { data: Vec<u8> },
     // Close,
     Ping { data: Vec<u8> },
+    Pong { data: Vec<u8> },
 }
 
 impl Frame {
@@ -96,10 +98,55 @@ impl Frame {
                 // Ping
                 Ok(Self::Ping { data })
             }
+            0xa => {
+                // Pong
+                Ok(Self::Pong { data })
+            }
             _ => {
                 bail!("not yet implemented");
             }
         }
+    }
+
+    pub fn get_data(&self) -> &Vec<u8> {
+        match self {
+            Self::Ping { data } => data,
+            Self::Pong { data } => data,
+        }
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        // TODO: Handle fragmentation
+
+        let mut res = vec![];
+
+        let opcode = match self {
+            Self::Ping { .. } => 0x9u8,
+            Self::Pong { .. } => 0xau8,
+        };
+        // always FIN for now
+        res.push(0x80 | opcode);
+
+        let data = self.get_data();
+
+        match data.len() {
+            l if l < (1 << 8) => res.push(l as u8),
+            l if l < (1 << 16) => {
+                res.push(0x7e);
+                res.extend((l as u16).to_be_bytes());
+            }
+            l if l < (1 << 63) => {
+                res.push(0x7f);
+                res.extend((l as u64).to_be_bytes());
+            }
+            _ => {
+                bail!("Too big payload");
+            }
+        }
+
+        res.extend(data.iter());
+
+        Ok(res)
     }
 
     fn unmask(data: Vec<u8>, mask_key: [u8; 4]) -> Vec<u8> {
@@ -208,6 +255,21 @@ impl Handler for WebSocketHandler {
         };
 
         // continue when handshake succeeded
+        {
+            let mut buf = vec![];
+            stream.read_buf(&mut buf).await?;
+            let request_frame = Frame::decode(buf)?;
+            debug!("Decode websocket frame: {:?}", request_frame);
+            match request_frame {
+                Frame::Ping { data } => {
+                    let response_frame = Frame::Pong { data };
+                    stream.write_all(&response_frame.encode()?).await?;
+                }
+                _ => {
+                    error!("Unexpected frame");
+                }
+            }
+        }
 
         Ok(())
     }
@@ -292,6 +354,21 @@ mod tests {
     // TODO
     // #[test]
     // fn test_decode_data_frame_with_long_data() {
+    //     unimplemented!()
+    // }
+
+    #[test]
+    fn test_encode_pong_frame() {
+        let frame = Frame::Pong {
+            data: vec![b'h', b'e', b'l', b'l', b'o'],
+        };
+        let expected = vec![0x8a, 0x05, b'h', b'e', b'l', b'l', b'o'];
+        assert_eq!(frame.encode().unwrap(), expected);
+    }
+
+    // TODO
+    // #[test]
+    // fn test_encode_data_frame_with_long_data() {
     //     unimplemented!()
     // }
 }
