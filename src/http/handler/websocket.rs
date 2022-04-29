@@ -40,9 +40,16 @@ const WS_ACCEPT_STR: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 pub enum Frame {
     // Text { data: String },
     // Binary { data: Vec<u8> },
-    // Close,
-    Ping { data: Vec<u8> },
-    Pong { data: Vec<u8> },
+    Close {
+        status_code: Option<u16>,
+        message: Vec<u8>,
+    },
+    Ping {
+        data: Vec<u8>,
+    },
+    Pong {
+        data: Vec<u8>,
+    },
 }
 
 impl Frame {
@@ -86,7 +93,7 @@ impl Frame {
             None
         };
 
-        let data = if let Some(mask_key) = mask_key_opt {
+        let mut data = if let Some(mask_key) = mask_key_opt {
             Self::unmask(raw_data[pos..(pos + len)].to_owned(), mask_key)
         } else {
             raw_data[pos..(pos + len)].to_owned()
@@ -94,6 +101,23 @@ impl Frame {
         pos += len;
 
         match metadata & 0x0f {
+            0x8 => {
+                // Close
+                if data.len() < 2 {
+                    // ignore body (assume that it has empty payload)
+                    Ok(Self::Close {
+                        status_code: None,
+                        message: vec![],
+                    })
+                } else {
+                    let status_code = u16::from_be_bytes(data.drain(..2).as_slice().try_into()?);
+                    let message = data;
+                    Ok(Self::Close {
+                        status_code: Some(status_code),
+                        message,
+                    })
+                }
+            }
             0x9 => {
                 // Ping
                 Ok(Self::Ping { data })
@@ -108,10 +132,21 @@ impl Frame {
         }
     }
 
-    pub fn get_data(&self) -> &Vec<u8> {
+    pub fn get_data(&self) -> Vec<u8> {
         match self {
-            Self::Ping { data } => data,
-            Self::Pong { data } => data,
+            Self::Close {
+                status_code,
+                message,
+            } => {
+                let mut res = vec![];
+                if let Some(code) = status_code {
+                    res.extend(u16::to_be_bytes(*code))
+                }
+                res.extend(message);
+                res
+            }
+            Self::Ping { data } => data.clone(),
+            Self::Pong { data } => data.clone(),
         }
     }
 
@@ -121,6 +156,7 @@ impl Frame {
         let mut res = vec![];
 
         let opcode = match self {
+            Self::Close { .. } => 0x8u8,
             Self::Ping { .. } => 0x9u8,
             Self::Pong { .. } => 0xau8,
         };
@@ -271,6 +307,19 @@ impl Handler for WebSocketHandler {
             }
         }
 
+        {
+            let close_frame = Frame::Close {
+                status_code: Some(1000),
+                message: vec![b'b', b'y', b'e'],
+            };
+            stream.write_all(&close_frame.encode()?).await?;
+
+            let mut buf = vec![];
+            stream.read_buf(&mut buf).await?;
+            let response_frame = Frame::decode(buf)?;
+            debug!("Decode websocket frame: {:?}", response_frame);
+        }
+
         Ok(())
     }
 }
@@ -346,16 +395,10 @@ mod tests {
         assert!(matches!(
             frame,
             Frame::Ping {
-                data: data,
+                data,
             } if data == vec![b'h', b'e', b'l', b'l', b'o']
         ))
     }
-
-    // TODO
-    // #[test]
-    // fn test_decode_data_frame_with_long_data() {
-    //     unimplemented!()
-    // }
 
     #[test]
     fn test_encode_pong_frame() {
@@ -365,6 +408,53 @@ mod tests {
         let expected = vec![0x8a, 0x05, b'h', b'e', b'l', b'l', b'o'];
         assert_eq!(frame.encode().unwrap(), expected);
     }
+
+    #[test]
+    fn test_decode_close_frame() {
+        let raw_data = vec![0x88, 0x80, 0x1e, 0x04, 0x7d, 0x84];
+        let frame = Frame::decode(raw_data).unwrap();
+        assert!(matches!(
+            frame,
+            Frame::Close { status_code: None, message } if message.is_empty()
+        ));
+    }
+
+    #[test]
+    fn test_decode_close_frame_with_payload() {
+        // status_code: 1002, message: hi
+        let raw_data = vec![0x88, 0x84, 0x1e, 0x04, 0x7d, 0x84, 0x1d, 0xee, 0x15, 0xed];
+        let frame = Frame::decode(raw_data).unwrap();
+        assert!(matches!(
+            frame,
+            Frame::Close { status_code: Some(1002), message } if message == vec![b'h', b'i']
+        ));
+    }
+
+    #[test]
+    fn test_encode_close_frame() {
+        let frame = Frame::Close {
+            status_code: None,
+            message: vec![],
+        };
+        let expected = vec![0x88, 0x00];
+        assert_eq!(frame.encode().unwrap(), expected);
+    }
+
+    #[test]
+    fn test_encode_close_frame_with_payload() {
+        let frame = Frame::Close {
+            status_code: Some(1000),
+            message: vec![b'h', b'i'],
+        };
+        let expected = vec![0x88, 0x04, 0x03, 0xe8, b'h', b'i'];
+        assert_eq!(frame.encode().unwrap(), expected);
+    }
+
+    // TODO
+    // #[test]
+    // fn test_decode_data_frame_with_long_data() {
+    //     unimplemented!()
+    // }
 
     // TODO
     // #[test]
