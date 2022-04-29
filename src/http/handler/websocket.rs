@@ -2,7 +2,7 @@ use crate::http::common::{HTTPVersion, IMFDateTime};
 use crate::http::handler::Handler;
 use crate::http::request::{Request, RequestMethod, RequestParseError};
 use crate::http::response::{Response, ResponseBody, ResponseHeaders, ResponseStatus, StatusLine};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use log::error;
 use sha1::{Digest, Sha1};
@@ -12,6 +12,104 @@ use tokio::net::TcpStream;
 
 const WS_VERSION: &str = "13";
 const WS_ACCEPT_STR: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+/*
+     WebSocket Frame (from RFC 6455 5.2):
+
+     0                   1                   2                   3
+     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+    +-+-+-+-+-------+-+-------------+-------------------------------+
+    |F|R|R|R| opcode|M| Payload len |    Extended payload length    |
+    |I|S|S|S|  (4)  |A|     (7)     |             (16/64)           |
+    |N|V|V|V|       |S|             |   (if payload len==126/127)   |
+    | |1|2|3|       |K|             |                               |
+    +-+-+-+-+-------+-+-------------+ - - - - - - - - - - - - - - - +
+    |     Extended payload length continued, if payload len == 127  |
+    + - - - - - - - - - - - - - - - +-------------------------------+
+    |                               |Masking-key, if MASK set to 1  |
+    +-------------------------------+-------------------------------+
+    | Masking-key (continued)       |          Payload Data         |
+    +-------------------------------- - - - - - - - - - - - - - - - +
+    :                     Payload Data continued ...                :
+    + - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
+    |                     Payload Data continued ...                |
+    +---------------------------------------------------------------+
+*/
+
+pub enum Frame {
+    // Text { data: String },
+    // Binary { data: Vec<u8> },
+    // Close,
+    Ping { data: Vec<u8> },
+}
+
+impl Frame {
+    pub fn decode(raw_data: Vec<u8>) -> Result<Frame> {
+        // TODO: Handle fragmentation
+
+        let mut pos = 0;
+
+        let metadata = raw_data[0];
+        let _fin = (metadata & 0x80) != 0;
+        let _rsv1 = (metadata & 0x40) != 0;
+        let _rsv1 = (metadata & 0x20) != 0;
+        let _rsv1 = (metadata & 0x10) != 0;
+        pos += 1;
+
+        let is_masked = (raw_data[1] & 0x80) != 0;
+        let len = match raw_data[1] & 0x7f {
+            l if l <= 0x7d => {
+                let res = l as usize;
+                pos += 1;
+                res
+            }
+            l if l == 0x7e => {
+                let res = usize::from_be_bytes((&raw_data[2..4]).try_into()?);
+                pos += 3;
+                res
+            }
+            l if l == 0x7f => {
+                let res = usize::from_be_bytes((&raw_data[2..10]).try_into()?);
+                pos += 9;
+                res
+            }
+            _ => unreachable!(),
+        };
+
+        let mask_key_opt: Option<[u8; 4]> = if is_masked {
+            let res = (&raw_data[pos..(pos + 4)]).try_into().ok();
+            pos += 4;
+            res
+        } else {
+            None
+        };
+
+        let data = if let Some(mask_key) = mask_key_opt {
+            Self::unmask(raw_data[pos..(pos + len)].to_owned(), mask_key)
+        } else {
+            raw_data[pos..(pos + len)].to_owned()
+        };
+        pos += len;
+
+        match metadata & 0x0f {
+            0x9 => {
+                // Ping
+                Ok(Self::Ping { data })
+            }
+            _ => {
+                bail!("not yet implemented");
+            }
+        }
+    }
+
+    fn unmask(data: Vec<u8>, mask_key: [u8; 4]) -> Vec<u8> {
+        // RFC 6455 5.3
+        data.into_iter()
+            .enumerate()
+            .map(|(i, b)| b ^ mask_key[i % 4])
+            .collect()
+    }
+}
 
 pub struct WebSocketHandler;
 
@@ -175,4 +273,25 @@ mod tests {
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().get_status(), &ResponseStatus::BadRequest);
     }
+
+    #[test]
+    fn test_decode_ping_frame() {
+        // ping frame with "hello" payload
+        let raw_data = vec![
+            0x89, 0x85, 0x78, 0xaf, 0x8c, 0x35, 0x10, 0xca, 0xe0, 0x59, 0x17,
+        ];
+        let frame = Frame::decode(raw_data).unwrap();
+        assert!(matches!(
+            frame,
+            Frame::Ping {
+                data: data,
+            } if data == vec![b'h', b'e', b'l', b'l', b'o']
+        ))
+    }
+
+    // TODO
+    // #[test]
+    // fn test_decode_data_frame_with_long_data() {
+    //     unimplemented!()
+    // }
 }
