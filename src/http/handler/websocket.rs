@@ -38,7 +38,9 @@ const WS_ACCEPT_STR: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 #[derive(Debug)]
 pub enum Frame {
-    // Text { data: String },
+    Text {
+        message: String,
+    },
     Binary {
         data: Vec<u8>,
     },
@@ -103,6 +105,12 @@ impl Frame {
         pos += len;
 
         match metadata & 0x0f {
+            0x1 => {
+                // Text
+                Ok(Self::Text {
+                    message: String::from_utf8(data)?,
+                })
+            }
             0x2 => {
                 // Binary
                 Ok(Self::Binary { data })
@@ -140,6 +148,7 @@ impl Frame {
 
     pub fn get_data(&self) -> Vec<u8> {
         match self {
+            Self::Text { message } => message.as_bytes().to_owned(),
             Self::Binary { data } => data.clone(),
             Self::Close {
                 status_code,
@@ -163,6 +172,7 @@ impl Frame {
         let mut res = vec![];
 
         let opcode = match self {
+            Self::Text { .. } => 0x1u8,
             Self::Binary { .. } => 0x2u8,
             Self::Close { .. } => 0x8u8,
             Self::Ping { .. } => 0x9u8,
@@ -306,8 +316,13 @@ impl Handler for WebSocketHandler {
             debug!("Decode websocket frame: {:?}", request_frame);
 
             match request_frame {
-                Frame::Binary { .. } => {
-                    // do nothing for now
+                frame @ Frame::Text { .. } => {
+                    // echo back
+                    stream.write_all(&frame.encode()?).await?;
+                }
+                frame @ Frame::Binary { .. } => {
+                    // echo back
+                    stream.write_all(&frame.encode()?).await?;
                 }
                 Frame::Ping { data } => {
                     let response_frame = Frame::Pong { data };
@@ -470,6 +485,29 @@ mod tests {
             data: vec![0x1, 0x2, 0x3],
         };
         let expected = vec![0x82, 0x03, 0x01, 0x02, 0x03];
+        assert_eq!(frame.encode().unwrap(), expected);
+    }
+
+    #[test]
+    fn test_decode_text_frame() {
+        let raw_data = vec![
+            0x81, 0x85, 0x36, 0x80, 0xd6, 0x47, 0x5e, 0xe5, 0xba, 0x2b, 0x59,
+        ];
+        let frame = Frame::decode(raw_data).unwrap();
+        assert!(matches!(
+            frame,
+            Frame::Text {
+                message
+            } if message == "hello"
+        ))
+    }
+
+    #[test]
+    fn test_encode_text_frame() {
+        let frame = Frame::Text {
+            message: "hello".to_owned(),
+        };
+        let expected = vec![0x81, 0x05, b'h', b'e', b'l', b'l', b'o'];
         assert_eq!(frame.encode().unwrap(), expected);
     }
 
