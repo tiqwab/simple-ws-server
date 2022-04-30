@@ -39,7 +39,9 @@ const WS_ACCEPT_STR: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 #[derive(Debug)]
 pub enum Frame {
     // Text { data: String },
-    // Binary { data: Vec<u8> },
+    Binary {
+        data: Vec<u8>,
+    },
     Close {
         status_code: Option<u16>,
         message: Vec<u8>,
@@ -101,6 +103,10 @@ impl Frame {
         pos += len;
 
         match metadata & 0x0f {
+            0x2 => {
+                // Binary
+                Ok(Self::Binary { data })
+            }
             0x8 => {
                 // Close
                 if data.len() < 2 {
@@ -134,6 +140,7 @@ impl Frame {
 
     pub fn get_data(&self) -> Vec<u8> {
         match self {
+            Self::Binary { data } => data.clone(),
             Self::Close {
                 status_code,
                 message,
@@ -156,6 +163,7 @@ impl Frame {
         let mut res = vec![];
 
         let opcode = match self {
+            Self::Binary { .. } => 0x2u8,
             Self::Close { .. } => 0x8u8,
             Self::Ping { .. } => 0x9u8,
             Self::Pong { .. } => 0xau8,
@@ -291,33 +299,27 @@ impl Handler for WebSocketHandler {
         };
 
         // continue when handshake succeeded
-        {
+        loop {
             let mut buf = vec![];
             stream.read_buf(&mut buf).await?;
             let request_frame = Frame::decode(buf)?;
             debug!("Decode websocket frame: {:?}", request_frame);
+
             match request_frame {
+                Frame::Binary { .. } => {
+                    // do nothing for now
+                }
                 Frame::Ping { data } => {
                     let response_frame = Frame::Pong { data };
                     stream.write_all(&response_frame.encode()?).await?;
                 }
-                _ => {
-                    error!("Unexpected frame");
+                Frame::Pong { .. } => {}
+                frame @ Frame::Close { .. } => {
+                    // send back Close to show we accept it
+                    stream.write_all(&frame.encode()?).await?;
+                    break;
                 }
             }
-        }
-
-        {
-            let close_frame = Frame::Close {
-                status_code: Some(1000),
-                message: vec![b'b', b'y', b'e'],
-            };
-            stream.write_all(&close_frame.encode()?).await?;
-
-            let mut buf = vec![];
-            stream.read_buf(&mut buf).await?;
-            let response_frame = Frame::decode(buf)?;
-            debug!("Decode websocket frame: {:?}", response_frame);
         }
 
         Ok(())
@@ -447,6 +449,27 @@ mod tests {
             message: vec![b'h', b'i'],
         };
         let expected = vec![0x88, 0x04, 0x03, 0xe8, b'h', b'i'];
+        assert_eq!(frame.encode().unwrap(), expected);
+    }
+
+    #[test]
+    fn test_decode_binary_frame() {
+        let raw_data = vec![0x82, 0x83, 0xec, 0xf6, 0xd7, 0x1c, 0xed, 0xf4, 0xd4];
+        let frame = Frame::decode(raw_data).unwrap();
+        assert!(matches!(
+            frame,
+            Frame::Binary {
+                data
+            } if data == vec![0x1, 0x2, 0x3]
+        ))
+    }
+
+    #[test]
+    fn test_encode_binary_frame() {
+        let frame = Frame::Binary {
+            data: vec![0x1, 0x2, 0x3],
+        };
+        let expected = vec![0x82, 0x03, 0x01, 0x02, 0x03];
         assert_eq!(frame.encode().unwrap(), expected);
     }
 
