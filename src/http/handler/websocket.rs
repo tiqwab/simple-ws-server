@@ -60,34 +60,58 @@ impl Frame {
     pub async fn decode<T: AsyncRead + Unpin>(reader: &mut T) -> Result<Frame> {
         // TODO: Handle fragmentation
 
-        let metadata = reader.read_u8().await?;
+        let metadata = reader
+            .read_u8()
+            .await
+            .context("Failed to read the first byte of frame")?;
         let _fin = (metadata & 0x80) != 0;
         let _rsv1 = (metadata & 0x40) != 0;
         let _rsv1 = (metadata & 0x20) != 0;
         let _rsv1 = (metadata & 0x10) != 0;
 
-        let first_len_byte = reader.read_u8().await?;
+        let first_len_byte = reader
+            .read_u8()
+            .await
+            .context("Failed to read first byte of length")?;
         let is_masked = (first_len_byte & 0x80) != 0;
         let len = match first_len_byte & 0x7f {
             l if l <= 0x7d => l as usize,
-            l if l == 0x7e => reader.read_u16().await? as usize,
-            l if l == 0x7f => reader.read_u64().await? as usize,
+            l if l == 0x7e => reader
+                .read_u16()
+                .await
+                .context("Failed to read 16-bit length")? as usize,
+            l if l == 0x7f => reader
+                .read_u64()
+                .await
+                .context("Failed to read 64-bit length")? as usize,
             _ => unreachable!(),
         };
 
         let mask_key_opt: Option<[u8; 4]> = if is_masked {
-            reader.read_u32().await?.to_be_bytes().try_into().ok()
+            reader
+                .read_u32()
+                .await
+                .context("Failed to read mask key")?
+                .to_be_bytes()
+                .try_into()
+                .ok()
         } else {
             None
         };
 
         let mut data = if let Some(mask_key) = mask_key_opt {
             let mut buf = vec![0u8; len];
-            reader.read_exact(&mut buf).await?;
+            reader
+                .read_exact(&mut buf)
+                .await
+                .context("Failed to read paylod")?;
             Self::unmask(buf, mask_key)
         } else {
             let mut buf = vec![0u8; len];
-            reader.read_exact(&mut buf).await?;
+            reader
+                .read_exact(&mut buf)
+                .await
+                .context("Failed to read payload")?;
             buf
         };
 
@@ -95,7 +119,8 @@ impl Frame {
             0x1 => {
                 // Text
                 Ok(Self::Text {
-                    message: String::from_utf8(data)?,
+                    message: String::from_utf8(data)
+                        .context("Received text frame but cannot interpret as UTF-8 string")?,
                 })
             }
             0x2 => {
@@ -111,7 +136,12 @@ impl Frame {
                         message: vec![],
                     })
                 } else {
-                    let status_code = u16::from_be_bytes(data.drain(..2).as_slice().try_into()?);
+                    let status_code = u16::from_be_bytes(
+                        data.drain(..2)
+                            .as_slice()
+                            .try_into()
+                            .context("Failed to read status_code in Close frame")?,
+                    );
                     let message = data;
                     Ok(Self::Close {
                         status_code: Some(status_code),
@@ -127,8 +157,8 @@ impl Frame {
                 // Pong
                 Ok(Self::Pong { data })
             }
-            _ => {
-                bail!("not yet implemented");
+            opcode => {
+                bail!("Unknown opcode: 0x{:02x}", opcode);
             }
         }
     }
