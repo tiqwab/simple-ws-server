@@ -77,7 +77,7 @@ impl Frame {
                 res
             }
             l if l == 0x7e => {
-                let res = usize::from_be_bytes((&raw_data[2..4]).try_into()?);
+                let res = u16::from_be_bytes((&raw_data[2..4]).try_into()?) as usize;
                 pos += 3;
                 res
             }
@@ -312,7 +312,7 @@ impl Handler for WebSocketHandler {
         loop {
             let mut buf = vec![];
             stream.read_buf(&mut buf).await?;
-            let request_frame = Frame::decode(buf)?;
+            let request_frame = Frame::decode(buf).context("Failed to decode frame")?;
             debug!("Decode websocket frame: {:?}", request_frame);
 
             match request_frame {
