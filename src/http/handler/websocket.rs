@@ -171,7 +171,7 @@ impl Frame {
         let data = self.get_data();
 
         match data.len() {
-            l if l < (1 << 8) => res.push(l as u8),
+            l if l < (1 << 7) => res.push(l as u8),
             l if l < (1 << 16) => {
                 res.push(0x7e);
                 res.extend((l as u16).to_be_bytes());
@@ -498,15 +498,63 @@ mod tests {
         assert_eq!(frame.encode().unwrap(), expected);
     }
 
-    // TODO
-    // #[test]
-    // fn test_decode_data_frame_with_long_data() {
-    //     unimplemented!()
-    // }
+    #[tokio::test]
+    async fn test_decode_data_frame_with_middle_size_data() {
+        // payload is "a" repeating `len` times
+        let len = 128;
+        let mut raw_data = vec![0x81u8, 0xfe, 0x00, 0x80, 0x61, 0xfc, 0xfd, 0x86];
+        raw_data.extend(vec![0x00, 0x9d, 0x9c, 0xe7].repeat(len / 4).iter());
+        let frame = Frame::decode(&mut raw_data.as_slice()).await.unwrap();
+        if let Frame::Text { message } = frame {
+            assert_eq!(message.len(), len,);
+        } else {
+            panic!("Expected Frame::Text but: {:?}", frame);
+        }
+    }
 
-    // TODO
-    // #[test]
-    // fn test_encode_data_frame_with_long_data() {
-    //     unimplemented!()
-    // }
+    #[tokio::test]
+    async fn test_decode_data_frame_with_long_size_data() {
+        // payload is "a" repeating `len` times
+        let len = 256 * 256 + 4;
+        let mut raw_data = vec![
+            0x81u8, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x04, 0x61, 0xfc, 0xfd, 0x86,
+        ];
+        raw_data.extend(vec![0x00, 0x9d, 0x9c, 0xe7].repeat(len / 4).iter());
+        let frame = Frame::decode(&mut raw_data.as_slice()).await.unwrap();
+        if let Frame::Text { message } = frame {
+            assert_eq!(message.len(), len,);
+        } else {
+            panic!("Expected Frame::Text but: {:?}", frame);
+        }
+    }
+
+    #[test]
+    fn test_encode_data_frame_with_middle_size_data() {
+        // payload is "a" repeating `len` times
+        let len = 128;
+        let frame = Frame::Text {
+            message: "a".repeat(len),
+        };
+        let expected = {
+            let mut buf = vec![0x81, 0x7e, 0x00, 0x80];
+            buf.extend("a".repeat(len).bytes());
+            buf
+        };
+        assert_eq!(frame.encode().unwrap(), expected);
+    }
+
+    #[test]
+    fn test_encode_data_frame_with_long_size_data() {
+        // payload is "a" repeating `len` times
+        let len = 256 * 256 + 4;
+        let frame = Frame::Text {
+            message: "a".repeat(len),
+        };
+        let expected = {
+            let mut buf = vec![0x81, 0x7f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x04];
+            buf.extend("a".repeat(len).bytes());
+            buf
+        };
+        assert_eq!(frame.encode().unwrap(), expected);
+    }
 }
