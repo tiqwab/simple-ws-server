@@ -39,7 +39,7 @@ impl Server {
     }
 }
 
-const HANDLERS: Lazy<Arc<Vec<Box<dyn Handler + Send + Sync>>>> =
+static HANDLERS: Lazy<Arc<Vec<Box<dyn Handler + Send + Sync>>>> =
     Lazy::new(|| Arc::new(vec![Box::new(WebSocketHandler), Box::new(EchoHandler)]));
 
 async fn handle_request(

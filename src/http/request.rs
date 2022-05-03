@@ -166,13 +166,12 @@ impl RequestHeaders {
     pub fn parse(lines: &[&str]) -> Result<RequestHeaders, RequestParseError> {
         // returns (field-name, field-value)
         fn parse_line(line: &str) -> Result<(String, String), RequestParseError> {
-            let pos_delim = line
-                .chars()
-                .position(|c| c == ':')
-                .ok_or(RequestParseError::new(
+            let pos_delim = line.chars().position(|c| c == ':').ok_or_else(|| {
+                RequestParseError::new(
                     ResponseStatus::BadRequest,
                     &format!("Illegal header field: {}", line),
-                ))?;
+                )
+            })?;
 
             let field_name = line[..pos_delim].to_string();
             let field_value = line[(pos_delim + 1)..].trim().to_string();
@@ -300,7 +299,7 @@ impl Request {
                     &format!("Failed to read header line: {:?}", err),
                 )
             })?;
-            if &line == "" {
+            if line.is_empty() {
                 break;
             }
             lines.push(line);
@@ -314,7 +313,7 @@ impl Request {
             })?
         };
 
-        let mut body_reader = metadata_reader.to_body_reader(content_length);
+        let mut body_reader = metadata_reader.into_body_reader(content_length);
         let request_body = RequestBody::new(
             body_reader
                 .read()
@@ -380,7 +379,7 @@ mod reader {
             }
         }
 
-        pub fn to_body_reader(self, length: usize) -> RequestBodyReader<'a, T> {
+        pub fn into_body_reader(self, length: usize) -> RequestBodyReader<'a, T> {
             RequestBodyReader::new(self.reader, self.buf, length)
         }
     }

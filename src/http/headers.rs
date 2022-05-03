@@ -7,7 +7,7 @@ pub struct HTTPHeader<Parser: HeaderParser> {
 
 impl<Parser: HeaderParser> HTTPHeader<Parser> {
     pub fn name(&self) -> &str {
-        &self.name
+        self.name
     }
 
     pub fn parse(&self, s: &str) -> Option<Parser::Value> {
@@ -31,7 +31,7 @@ impl HeaderParser for VecHeaderParser {
     }
 }
 
-pub const CONNECTION: Lazy<HTTPHeader<VecHeaderParser>> = Lazy::new(|| HTTPHeader {
+pub static CONNECTION: Lazy<HTTPHeader<VecHeaderParser>> = Lazy::new(|| HTTPHeader {
     name: "Connection",
     parser: VecHeaderParser,
 });

@@ -96,13 +96,13 @@ impl Frame {
         }
 
         let mask_key_opt: Option<[u8; 4]> = if is_masked {
-            reader
-                .read_u32()
-                .await
-                .context("Failed to read mask key")?
-                .to_be_bytes()
-                .try_into()
-                .ok()
+            Some(
+                reader
+                    .read_u32()
+                    .await
+                    .context("Failed to read mask key")?
+                    .to_be_bytes(),
+            )
         } else {
             None
         };
@@ -249,13 +249,13 @@ impl WebSocketHandler {
             RequestParseError::new(ResponseStatus::BadRequest, msg)
         }
 
-        if !check_header(&request, "Upgrade", "websocket") {
+        if !check_header(request, "Upgrade", "websocket") {
             return Err(client_error("Illegal Upgrade header"));
         }
-        if !check_header(&request, "Connection", "upgrade") {
+        if !check_header(request, "Connection", "upgrade") {
             return Err(client_error("Illegal Connection header"));
         }
-        if !check_header(&request, "Sec-WebSocket-Version", WS_VERSION) {
+        if !check_header(request, "Sec-WebSocket-Version", WS_VERSION) {
             return Err(client_error("Illegal WebSocket version"));
         }
         if request.get_method() != &RequestMethod::GET {
@@ -264,7 +264,7 @@ impl WebSocketHandler {
 
         let sec_ws_key = request
             .get_header("Sec-WebSocket-Key")
-            .ok_or(client_error("Missing Sec-WebSocket-Key header"))?;
+            .ok_or_else(|| client_error("Missing Sec-WebSocket-Key header"))?;
 
         let bs: Vec<u8> = sec_ws_key.bytes().chain(WS_ACCEPT_STR.bytes()).collect();
         let mut hasher = Sha1::new();
