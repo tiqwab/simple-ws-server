@@ -1,0 +1,7 @@
+[http]
+addr = "127.0.0.1"
+port = 8888
+
+[ws]
+max_payload_size = "1MB"
+

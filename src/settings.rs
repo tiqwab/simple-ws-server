@@ -1,8 +1,9 @@
 use anyhow::Result;
-use config::{Config, Environment};
+use config::Config;
 use getset::Getters;
 use human_size::Size;
 use serde::Deserialize;
+use std::path::Path;
 use std::str::FromStr;
 
 #[derive(Debug, Deserialize, Getters)]
@@ -52,9 +53,10 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn load() -> Result<Settings> {
+    pub fn load(path: impl AsRef<Path>) -> Result<Settings> {
         let config = Config::builder()
-            .add_source(Environment::with_prefix("SWS").separator("__"))
+            .add_source(config::File::from(path.as_ref()))
+            .add_source(config::Environment::with_prefix("SWS").separator("__"))
             .build()?;
         let settings = config.try_deserialize()?;
         Ok(settings)
