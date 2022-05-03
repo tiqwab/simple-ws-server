@@ -2,11 +2,13 @@ use crate::http::common::{HTTPVersion, IMFDateTime};
 use crate::http::handler::Handler;
 use crate::http::request::{Request, RequestMethod, RequestParseError};
 use crate::http::response::{Response, ResponseBody, ResponseHeaders, ResponseStatus, StatusLine};
+use crate::settings::Settings;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use log::{debug, error};
 use sha1::{Digest, Sha1};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -57,7 +59,10 @@ pub enum Frame {
 }
 
 impl Frame {
-    pub async fn decode<T: AsyncRead + Unpin>(reader: &mut T) -> Result<Frame> {
+    pub async fn decode<T: AsyncRead + Unpin>(
+        reader: &mut T,
+        max_payload_size: usize,
+    ) -> Result<Frame> {
         // TODO: Handle fragmentation
 
         let metadata = reader
@@ -86,6 +91,9 @@ impl Frame {
                 .context("Failed to read 64-bit length")? as usize,
             _ => unreachable!(),
         };
+        if len > max_payload_size {
+            bail!("Payload is too big");
+        }
 
         let mask_key_opt: Option<[u8; 4]> = if is_masked {
             reader
@@ -281,7 +289,12 @@ impl WebSocketHandler {
 
 #[async_trait]
 impl Handler for WebSocketHandler {
-    fn accepts(&self, request: &Request, _client_addr: SocketAddr) -> bool {
+    fn accepts(
+        &self,
+        request: &Request,
+        _client_addr: SocketAddr,
+        _settings: Arc<Settings>,
+    ) -> bool {
         matches!(
             request.get_header_lc("Upgrade").as_deref(),
             Some("websocket")
@@ -293,6 +306,7 @@ impl Handler for WebSocketHandler {
         request: Request,
         mut stream: TcpStream,
         client_addr: SocketAddr,
+        settings: Arc<Settings>,
     ) -> Result<()> {
         match self.handshake(&request) {
             Ok(res) => {
@@ -326,8 +340,9 @@ impl Handler for WebSocketHandler {
         };
 
         // continue when handshake succeeded
+        let max_payload_size: usize = settings.as_ref().ws().max_payload_size().to_bytes() as usize;
         loop {
-            let request_frame = Frame::decode(&mut stream)
+            let request_frame = Frame::decode(&mut stream, max_payload_size)
                 .await
                 .context("Failed to decode frame")?;
             debug!("Decode websocket frame: {:?}", request_frame);
@@ -425,7 +440,7 @@ mod tests {
         let raw_data = vec![
             0x89, 0x85, 0x78, 0xaf, 0x8c, 0x35, 0x10, 0xca, 0xe0, 0x59, 0x17,
         ];
-        let frame = Frame::decode(&mut raw_data.as_slice()).await.unwrap();
+        let frame = Frame::decode(&mut raw_data.as_slice(), 1024).await.unwrap();
         assert!(matches!(
             frame,
             Frame::Ping {
@@ -446,7 +461,7 @@ mod tests {
     #[tokio::test]
     async fn test_decode_close_frame() {
         let raw_data = vec![0x88, 0x80, 0x1e, 0x04, 0x7d, 0x84];
-        let frame = Frame::decode(&mut raw_data.as_slice()).await.unwrap();
+        let frame = Frame::decode(&mut raw_data.as_slice(), 1024).await.unwrap();
         assert!(matches!(
             frame,
             Frame::Close { status_code: None, message } if message.is_empty()
@@ -457,7 +472,7 @@ mod tests {
     async fn test_decode_close_frame_with_payload() {
         // status_code: 1002, message: hi
         let raw_data = vec![0x88, 0x84, 0x1e, 0x04, 0x7d, 0x84, 0x1d, 0xee, 0x15, 0xed];
-        let frame = Frame::decode(&mut raw_data.as_slice()).await.unwrap();
+        let frame = Frame::decode(&mut raw_data.as_slice(), 1024).await.unwrap();
         assert!(matches!(
             frame,
             Frame::Close { status_code: Some(1002), message } if message == vec![b'h', b'i']
@@ -487,7 +502,7 @@ mod tests {
     #[tokio::test]
     async fn test_decode_binary_frame() {
         let raw_data = vec![0x82, 0x83, 0xec, 0xf6, 0xd7, 0x1c, 0xed, 0xf4, 0xd4];
-        let frame = Frame::decode(&mut raw_data.as_slice()).await.unwrap();
+        let frame = Frame::decode(&mut raw_data.as_slice(), 1024).await.unwrap();
         assert!(matches!(
             frame,
             Frame::Binary {
@@ -510,7 +525,7 @@ mod tests {
         let raw_data = vec![
             0x81u8, 0x85, 0x36, 0x80, 0xd6, 0x47, 0x5e, 0xe5, 0xba, 0x2b, 0x59,
         ];
-        let frame = Frame::decode(&mut raw_data.as_slice()).await.unwrap();
+        let frame = Frame::decode(&mut raw_data.as_slice(), 1024).await.unwrap();
         assert!(matches!(
             frame,
             Frame::Text {
@@ -534,7 +549,7 @@ mod tests {
         let len = 128;
         let mut raw_data = vec![0x81u8, 0xfe, 0x00, 0x80, 0x61, 0xfc, 0xfd, 0x86];
         raw_data.extend(vec![0x00, 0x9d, 0x9c, 0xe7].repeat(len / 4).iter());
-        let frame = Frame::decode(&mut raw_data.as_slice()).await.unwrap();
+        let frame = Frame::decode(&mut raw_data.as_slice(), 1024).await.unwrap();
         if let Frame::Text { message } = frame {
             assert_eq!(message.len(), len,);
         } else {
@@ -550,7 +565,7 @@ mod tests {
             0x81u8, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x04, 0x61, 0xfc, 0xfd, 0x86,
         ];
         raw_data.extend(vec![0x00, 0x9d, 0x9c, 0xe7].repeat(len / 4).iter());
-        let frame = Frame::decode(&mut raw_data.as_slice()).await.unwrap();
+        let frame = Frame::decode(&mut raw_data.as_slice(), len).await.unwrap();
         if let Frame::Text { message } = frame {
             assert_eq!(message.len(), len,);
         } else {
@@ -586,5 +601,14 @@ mod tests {
             buf
         };
         assert_eq!(frame.encode().unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn test_failed_to_decode_bigger_frame_than_limit() {
+        let raw_data = vec![
+            0x81u8, 0x85, 0x36, 0x80, 0xd6, 0x47, 0x5e, 0xe5, 0xba, 0x2b, 0x59,
+        ];
+        let res = Frame::decode(&mut raw_data.as_slice(), 4).await;
+        assert!(res.is_err());
     }
 }

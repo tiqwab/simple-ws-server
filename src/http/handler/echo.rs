@@ -2,12 +2,14 @@ use crate::http::common::{HTTPVersion, IMFDateTime};
 use crate::http::handler::Handler;
 use crate::http::request::{Request, RequestParseError};
 use crate::http::response::{Response, ResponseBody, ResponseHeaders, ResponseStatus, StatusLine};
+use crate::settings::Settings;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use log::error;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
@@ -39,7 +41,12 @@ impl EchoResponse {
 
 #[async_trait]
 impl Handler for EchoHandler {
-    fn accepts(&self, request: &Request, client_addr: SocketAddr) -> bool {
+    fn accepts(
+        &self,
+        request: &Request,
+        client_addr: SocketAddr,
+        _settings: Arc<Settings>,
+    ) -> bool {
         true
     }
 
@@ -48,6 +55,7 @@ impl Handler for EchoHandler {
         request: Request,
         mut stream: TcpStream,
         client_addr: SocketAddr,
+        _settings: Arc<Settings>,
     ) -> Result<()> {
         fn prepare_response(request: Request) -> Result<Response, RequestParseError> {
             let echo_response = EchoResponse::new(
