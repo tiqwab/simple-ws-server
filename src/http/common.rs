@@ -32,6 +32,7 @@ impl fmt::Display for HTTPVersion {
 pub struct IMFDateTime(DateTime<Utc>);
 
 impl IMFDateTime {
+    #[allow(dead_code)]
     pub fn new(inner: DateTime<Utc>) -> IMFDateTime {
         IMFDateTime(inner)
     }

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use log::{debug, warn};
+use log::debug;
 use simple_ws_server::http::server::Server;
 use simple_ws_server::settings::Settings;
 use std::net::SocketAddr;

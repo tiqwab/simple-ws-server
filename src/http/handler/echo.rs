@@ -43,8 +43,8 @@ impl EchoResponse {
 impl Handler for EchoHandler {
     fn accepts(
         &self,
-        request: &Request,
-        client_addr: SocketAddr,
+        _request: &Request,
+        _client_addr: SocketAddr,
         _settings: Arc<Settings>,
     ) -> bool {
         true

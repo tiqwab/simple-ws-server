@@ -2,16 +2,13 @@ use crate::http::common::HTTPVersion;
 use crate::http::headers;
 use crate::http::response::ResponseStatus;
 use anyhow::Result;
-use log::{debug, error};
-use std::collections::hash_map::Iter;
+use log::error;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::io::Read;
 use std::str::FromStr;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::net::TcpStream;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct RequestParseError(ResponseStatus, String);
@@ -21,10 +18,12 @@ impl RequestParseError {
         RequestParseError(status, message.to_string())
     }
 
+    #[allow(dead_code)]
     pub fn get_status(&self) -> &ResponseStatus {
         &self.0
     }
 
+    #[allow(dead_code)]
     pub fn get_error_message(&self) -> &str {
         &self.1
     }
@@ -120,6 +119,7 @@ impl RequestHeaders {
         RequestHeaders(HashMap::new())
     }
 
+    #[allow(dead_code)]
     pub fn from<const N: usize>(
         arr: [(impl Into<String>, impl Into<String>); N],
     ) -> RequestHeaders {
@@ -130,10 +130,12 @@ impl RequestHeaders {
         RequestHeaders(headers)
     }
 
+    #[allow(dead_code)]
     pub fn get_raw(&self, key: &str) -> Option<&str> {
         self.0.get(key).map(|x| x.as_str())
     }
 
+    #[allow(dead_code)]
     pub fn get<T, U: headers::HeaderParser<Value = T>>(
         &self,
         key: &headers::HTTPHeader<U>,
@@ -141,18 +143,22 @@ impl RequestHeaders {
         self.get_raw(key.name()).and_then(|s| key.parse(s))
     }
 
+    #[allow(dead_code)]
     pub fn insert(&mut self, key: String, value: String) -> Option<String> {
         self.0.insert(key, value)
     }
 
+    #[allow(dead_code)]
     pub fn remove(&mut self, key: &str) -> Option<String> {
         self.0.remove(key)
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    #[allow(dead_code)]
     pub fn iter(&self) -> RequestHeadersIter<'_, String, String> {
         self.0.iter()
     }
@@ -201,6 +207,7 @@ impl RequestBody {
         RequestBody(v)
     }
 
+    #[allow(dead_code)]
     pub fn parse<T: BodyParser>(&self) -> Result<T> {
         T::parse(&self.0)
     }
@@ -234,42 +241,48 @@ impl Request {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_method(&self) -> &RequestMethod {
         &self.request_line.method
     }
 
+    #[allow(dead_code)]
     pub fn get_path(&self) -> &str {
         &self.request_line.path
     }
 
+    #[allow(dead_code)]
     pub fn get_headers(&self) -> &RequestHeaders {
         &self.headers
     }
 
+    #[allow(dead_code)]
     pub fn get_header(&self, key: &str) -> Option<&str> {
         self.headers.get_raw(key)
     }
 
+    #[allow(dead_code)]
     pub fn insert_header(&mut self, key: String, value: String) -> Option<String> {
         self.headers.insert(key, value)
     }
 
+    #[allow(dead_code)]
     pub fn remove_header(&mut self, key: &str) -> Option<String> {
         self.headers.remove(key)
     }
 
     /// Return header value converted to lower cases
+    #[allow(dead_code)]
     pub fn get_header_lc(&self, key: &str) -> Option<String> {
         self.headers.get_raw(key).map(|s| s.to_ascii_lowercase())
     }
 
+    #[allow(dead_code)]
     pub fn get_body(&self) -> &[u8] {
         &self.body.0
     }
 
-    pub async fn parse<T: AsyncRead + Unpin>(
-        mut reader: &mut T,
-    ) -> Result<Self, RequestParseError> {
+    pub async fn parse<T: AsyncRead + Unpin>(reader: &mut T) -> Result<Self, RequestParseError> {
         let mut metadata_reader = reader::RequestMetadataReader::new(reader);
 
         let request_line = RequestLine::parse(&metadata_reader.read().await.map_err(|err| {
@@ -413,7 +426,7 @@ mod reader {
 mod tests {
     use super::*;
     use crate::util::temp::TempFile;
-    use tokio::fs::{File, OpenOptions};
+    use tokio::fs::OpenOptions;
     use tokio::io::AsyncWriteExt;
 
     #[test]

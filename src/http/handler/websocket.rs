@@ -5,7 +5,6 @@ use crate::http::response::{Response, ResponseBody, ResponseHeaders, ResponseSta
 use crate::settings::Settings;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use futures::TryFutureExt;
 use log::{debug, error};
 use sha1::{Digest, Sha1};
 use std::net::SocketAddr;

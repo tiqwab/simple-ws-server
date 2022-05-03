@@ -14,6 +14,7 @@ impl StatusLine {
         StatusLine { version, status }
     }
 
+    #[allow(dead_code)]
     pub fn get_status(&self) -> &ResponseStatus {
         &self.status
     }
@@ -38,6 +39,7 @@ impl ResponseHeaders {
         ResponseHeaders(headers)
     }
 
+    #[allow(dead_code)]
     pub fn from<const N: usize>(
         arr: [(impl Into<String>, impl Into<String>); N],
     ) -> ResponseHeaders {
@@ -48,18 +50,22 @@ impl ResponseHeaders {
         ResponseHeaders::new(headers)
     }
 
+    #[allow(dead_code)]
     pub fn empty() -> ResponseHeaders {
         ResponseHeaders(HashMap::new())
     }
 
+    #[allow(dead_code)]
     pub fn get(&self, key: &str) -> Option<&str> {
         self.0.get(key).map(|x| x.as_str())
     }
 
+    #[allow(dead_code)]
     pub fn insert(&mut self, key: String, value: String) -> Option<String> {
         self.0.insert(key, value)
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -82,10 +88,12 @@ impl ResponseBody {
     }
 
     /// Return size as bytes
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    #[allow(dead_code)]
     pub fn encode(&self) -> Vec<u8> {
         self.0.clone()
     }
@@ -107,10 +115,12 @@ impl Response {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_status(&self) -> &ResponseStatus {
         self.status_line.get_status()
     }
 
+    #[allow(dead_code)]
     pub fn get_header(&self, key: &str) -> Option<&str> {
         self.headers.get(key)
     }

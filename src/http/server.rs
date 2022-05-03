@@ -3,12 +3,11 @@ use crate::http::handler::websocket::WebSocketHandler;
 use crate::http::handler::Handler;
 use crate::http::request::Request;
 use crate::settings::Settings;
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use futures::TryFutureExt;
 use log::{debug, error};
 use once_cell::sync::Lazy;
 use std::net::SocketAddr;
-use std::ops::Deref;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 

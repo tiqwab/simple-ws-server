@@ -4,11 +4,13 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 pub struct TempFile {
+    #[allow(dead_code)]
     inner: std::fs::File,
     path: PathBuf,
 }
 
 impl TempFile {
+    #[allow(dead_code)]
     pub fn new() -> Result<TempFile> {
         let mut path = {
             let mut dir = std::env::temp_dir();
@@ -22,10 +24,12 @@ impl TempFile {
         Ok(TempFile { inner: file, path })
     }
 
+    #[allow(dead_code)]
     pub fn get_path(&self) -> &Path {
         &self.path
     }
 
+    #[allow(dead_code)]
     pub async fn access_for_read(&self) -> Result<tokio::fs::File> {
         let file = tokio::fs::OpenOptions::new()
             .read(true)
@@ -34,6 +38,7 @@ impl TempFile {
         Ok(file)
     }
 
+    #[allow(dead_code)]
     pub async fn access_for_write(&self) -> Result<tokio::fs::File> {
         let file = tokio::fs::OpenOptions::new()
             .write(true)
