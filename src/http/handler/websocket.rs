@@ -5,6 +5,7 @@ use crate::http::response::{Response, ResponseBody, ResponseHeaders, ResponseSta
 use crate::settings::Settings;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use futures::TryFutureExt;
 use log::{debug, error};
 use sha1::{Digest, Sha1};
 use std::net::SocketAddr;
@@ -339,34 +340,49 @@ impl Handler for WebSocketHandler {
             }
         };
 
-        // continue when handshake succeeded
-        let max_payload_size: usize = settings.as_ref().ws().max_payload_size().to_bytes() as usize;
-        loop {
-            let request_frame = Frame::decode(&mut stream, max_payload_size)
-                .await
-                .context("Failed to decode frame")?;
-            debug!("Decode websocket frame: {:?}", request_frame);
+        async fn handle_frame(stream: &mut TcpStream, settings: Arc<Settings>) -> Result<()> {
+            // continue when handshake succeeded
+            let max_payload_size: usize =
+                settings.as_ref().ws().max_payload_size().to_bytes() as usize;
+            loop {
+                let request_frame = Frame::decode(stream, max_payload_size)
+                    .await
+                    .context("Failed to decode frame")?;
+                debug!("Decode websocket frame: {:?}", request_frame);
 
-            match request_frame {
-                frame @ Frame::Text { .. } => {
-                    // echo back
-                    stream.write_all(&frame.encode()?).await?;
-                }
-                frame @ Frame::Binary { .. } => {
-                    // echo back
-                    stream.write_all(&frame.encode()?).await?;
-                }
-                Frame::Ping { data } => {
-                    let response_frame = Frame::Pong { data };
-                    stream.write_all(&response_frame.encode()?).await?;
-                }
-                Frame::Pong { .. } => {}
-                frame @ Frame::Close { .. } => {
-                    // send back Close to show we accept it
-                    stream.write_all(&frame.encode()?).await?;
-                    break;
+                match request_frame {
+                    frame @ Frame::Text { .. } => {
+                        // echo back
+                        stream.write_all(&frame.encode()?).await?;
+                    }
+                    frame @ Frame::Binary { .. } => {
+                        // echo back
+                        stream.write_all(&frame.encode()?).await?;
+                    }
+                    Frame::Ping { data } => {
+                        let response_frame = Frame::Pong { data };
+                        stream.write_all(&response_frame.encode()?).await?;
+                    }
+                    Frame::Pong { .. } => {}
+                    frame @ Frame::Close { .. } => {
+                        // send back Close to show we accept it
+                        stream.write_all(&frame.encode()?).await?;
+                        break;
+                    }
                 }
             }
+            Ok(())
+        }
+
+        let res = handle_frame(&mut stream, settings).await;
+        if let Err(err) = res {
+            error!("Failed to handle frame: {:?}", err);
+            // send Close because of error
+            let frame = Frame::Close {
+                status_code: None,
+                message: vec![],
+            };
+            stream.write_all(&frame.encode()?).await?;
         }
 
         Ok(())
